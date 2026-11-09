@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>ShowUp host dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font:15px system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+form{display:flex;gap:8px;flex-wrap:wrap}input{flex:1 1 220px;min-width:0;max-width:100%;padding:8px}button{padding:8px 14px}
+select{max-width:100%;min-width:0}h2{overflow-wrap:anywhere}
+.tiles{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}.tile{border:1px solid #ddd;border-radius:10px;padding:10px 14px;flex:1 1 100px;min-width:0;max-width:200px}
+.tile b{display:block;font-size:20px;overflow-wrap:anywhere}.tile span{font-size:12px;color:#666}
+td.acct{word-break:break-all}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.CheckedIn{color:#0a7a3a}.Rsvp{color:#a15c00}.Cancelled{color:#777}.err{color:#b00}.ok{color:#0a7a3a}small{color:#666}
+</style></head>
+<body>
+<h1>ShowUp host dashboard</h1>
+<form id="f"><input id="ev" placeholder="event account, e.g. judges-2026.showup-factory-1793597558.testnet" required>
+<button>Load</button><select id="pick"><option value="">Factory events…</option></select></form>
+<div id="out"><p><small>Reads get_info / get_guests over testnet RPC. Nothing is signed.</small></p></div>
+<script type="module">
+import { viewCall, eventSummary, escapeHtml as e, formatNear, friendlyRpcError } from '../widget/core.mjs';
+import { projectPayouts, fmtRow, ledgerCsv, fetchEscrowTxns } from './logic.mjs';
+const FACTORY = 'showup-factory-1793597558.testnet';
+const params = new URLSearchParams(location.search), out = document.getElementById('out'), ev = document.getElementById('ev'), pick = document.getElementById('pick');
+const rpc = params.get('rpc') || undefined;
+async function load(id) {
+  out.innerHTML = `<p>Loading ${e(id)}…</p>`;
+  try {
+    const [info, guests] = await Promise.all([viewCall(id, 'get_info', {}, { rpc }), viewCall(id, 'get_guests', {}, { rpc })]);
+    const s = eventSummary(info, BigInt(Date.now()) * 1_000_000n), p = projectPayouts(info, guests);
+    const tile = (v, l) => `<div class="tile"><b>${v}</b><span>${l}</span></div>`;
+    out.innerHTML = `<h2>${e(id)} <small>${e(s.phaseLabel)}</small></h2>
+      <p><small>host ${e(info.host)} · cancel deadline ${e(s.cancelDeadline)} · check-in ${e(new Date(Number(BigInt(info.checkin_start_ns) / 1000000n)).toISOString())} → ${e(new Date(Number(BigInt(info.checkin_end_ns) / 1000000n)).toISOString())}</small> · <a href="checkin.html?event=${encodeURIComponent(id)}">Door check-in (QR) →</a></p>
+      <div class="tiles">${tile(s.depositNear + ' NEAR', 'deposit')}${tile(`${info.active}/${info.capacity}`, 'active / capacity')}${tile(s.spotsLeft, 'spots left')}
+      ${tile(p.tally.CheckedIn, 'checked in')}${tile(p.tally.Rsvp, info.settled ? 'no-shows' : 'not yet checked in')}${tile(info.cancelled ?? p.tally.Cancelled, 'cancelled')}
+      ${tile(formatNear(p.held, 4) + ' NEAR', 'held for settle')}${tile('+' + formatNear(p.bonus, 6), 'bonus per attendee')}</div>
+      <p><button id="csv" type="button">Export CSV</button> <small id="csvnote">One row per guest: deposit, refund and payout in NEAR with tx hashes (from the NearBlocks API v3 receipts indexer) and UTC times.</small></p>
+      <h3>${info.settled ? 'Final payouts (settled)' : 'Projected payouts if settled with current statuses'}</h3>
+      <div style="overflow-x:auto"><table><thead><tr><th>Account</th><th>Status</th><th>Outcome</th><th class="num">Payout (NEAR)</th></tr></thead><tbody>
+      ${p.rows.map(fmtRow).map((r) => `<tr><td class="acct">${e(r.account)}</td><td class="${e(r.status)}">${e(r.status)}</td><td>${e(r.outcome)}</td><td class="num">${e(r.payoutNear)}${r.status === 'host' ? ` <small>(${r.payout} yocto)</small>` : ''}</td></tr>`).join('') || '<tr><td colspan="4">No guests yet</td></tr>'}
+      </tbody></table></div>
+      <p class="${p.conserved ? 'ok' : 'err'}">Conservation: paid ${formatNear(p.paid, 24)} = held ${formatNear(p.held, 24)} NEAR → ${p.conserved}</p>
+      <p><small>Rule: each attendee gets deposit + floor(deposit × no-shows / attendees); the rounding dust goes to the host. <a href="https://testnet.near.rocks/account/${e(id)}" target="_blank" rel="noopener">View on NEAR Rocks</a></small></p>`;
+    document.getElementById('csv').onclick = () => exportCsv(id, info, guests);
+  } catch (err) {
+    out.innerHTML = `<p class="err">${e(friendlyRpcError(err))}</p><p><button id="retry" type="button">Retry</button></p>`;
+    document.getElementById('retry').onclick = () => load(id);
+  }
+}
+async function exportCsv(id, info, guests) {
+  const b = document.getElementById('csv'), note = document.getElementById('csvnote');
+  b.disabled = true; note.textContent = 'Reading escrow receipts from the NearBlocks API v3 indexer…';
+  const txns = await fetchEscrowTxns(id);
+  const csv = ledgerCsv(id, info, guests, txns);
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), download: `showup-${id}-ledger.csv` });
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  note.textContent = txns.length ? `Exported ${guests.length} guest row(s) using ${txns.length} receipt(s) from the NearBlocks API v3 indexer.`
+    : `Exported ${guests.length} guest row(s). The NearBlocks API v3 indexer returned no receipts for this account, so the tx hash and time columns are blank.`;
+  b.disabled = false;
+}
+document.getElementById('f').addEventListener('submit', (x) => { x.preventDefault(); history.replaceState(null, '', `?event=${encodeURIComponent(ev.value.trim())}`); load(ev.value.trim()); });
+pick.addEventListener('change', () => { if (pick.value) { ev.value = pick.value; document.getElementById('f').requestSubmit(); } });
+viewCall(params.get('factory') || FACTORY, 'get_events', {}, { rpc }).then((list) => {
+  for (const r of [...list, { account_id: 'showup-demo-1793595312.testnet', name: 'showup-demo (settled, pre-factory)' }])
+    pick.add(new Option(`${r.name} (${r.account_id})`, r.account_id));
+}).catch(() => {});
+ev.value = params.get('event') || 'demo-day.showup-factory-1793597558.testnet'; load(ev.value);
+</script>
+</body></html>

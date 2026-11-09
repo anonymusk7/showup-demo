@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>ShowUp door check-in</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box}body{font:15px/1.45 ui-sans-serif,system-ui,sans-serif;max-width:560px;margin:24px auto;padding:0 16px;color:#0f172a;background:#f8fafc}
+h1{font-size:22px;margin:0 0 4px}.sub{color:#64748b;margin:0 0 16px;font-size:13.5px;word-break:break-all}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 8px 24px -14px rgb(15 23 42/.2)}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+button{padding:10px 14px;border:0;border-radius:10px;background:#0f172a;color:#fff;font-weight:600;cursor:pointer}button.ghost{background:#fff;color:#0f172a;border:1px solid #cbd5e1}
+button[disabled]{background:#cbd5e1;color:#475569;cursor:default}
+input{flex:1;min-width:0;padding:10px;border:1px solid #cbd5e1;border-radius:10px;font:inherit}
+video{width:100%;border-radius:12px;background:#000;display:none;margin-top:10px}
+.pill{font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:#f1f5f9}.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}
+.guest{font-size:18px;font-weight:700;word-break:break-all}.reason{margin:6px 0 10px;color:#475569}.err{color:#b91c1c}small{color:#64748b}
+ul{padding-left:18px;margin:6px 0}a{color:#334155}
+</style></head>
+<body>
+<h1>Door check-in</h1>
+<p class="sub" id="ev"></p>
+<div class="card" id="fatal" hidden></div>
+<div class="card">
+  <div class="row"><span id="me">Not signed in</span><button id="auth">Sign in as host / checker</button></div>
+  <p id="role"><small>Only the event host or an added checker can call <code>check_in</code>. The contract enforces this; this page just shows the reason before you sign.</small></p>
+</div>
+<div class="card">
+  <div class="row"><button id="scan" class="ghost">Scan guest QR</button><small id="camnote"></small></div>
+  <video id="cam" playsinline muted></video>
+  <form id="manual" class="row" style="margin-top:10px" action="javascript:void(0)" onsubmit="return false"><input id="code" placeholder="or paste the code / guest account id"><button type="button" id="lookup" class="ghost" disabled title="Loading…">Look up</button></form>
+</div>
+<div class="card" id="result" hidden></div>
+<div class="card"><b>Recent check-ins</b><ul id="log"><li><small>None yet in this session.</small></li></ul></div>
+<p><small><a id="dash" href="#">← Host dashboard</a></small></p>
+<script type="module">
+import { viewCall, escapeHtml as e, parseCheckinPayload, checkinCheck, loadWallet, walletWasUsed, explorerTx, isAccountId, RPC_FALLBACKS, gaslessCall, gaslessOrWallet, friendlyRpcError } from '../widget/core.mjs';
+import { isPass, verifyPass, rpcAccessKey } from '../widget/pass.mjs';
+const seen = new Set(); // replay cache for this door
+const q = new URLSearchParams(location.search);
+const EVENT = q.get('event') || 'demo-day.showup-factory-1793597558.testnet';
+const RELAYER = q.get('relayer') || null; // e.g. http://localhost:3030 (pnpm relayer)
+const $ = (id) => document.getElementById(id);
+// Can't run without the event: explain why (Look up stays disabled) and stop evaluating this module without an uncaught error.
+const halt = (msg, retry) => {
+  $('fatal').hidden = false; $('lookup').title = 'Event not loaded';
+  $('fatal').innerHTML = `<p class="err">${e(msg)}</p>${retry ? '<button id="retry" type="button">Retry</button>' : ''}`;
+  if (retry) $('retry').onclick = () => location.reload();
+  return new Promise(() => {});
+};
+$('ev').textContent = EVENT; $('dash').href = `./?event=${encodeURIComponent(EVENT)}`;
+if (!isAccountId(EVENT)) await halt(`"${EVENT}" is not a NEAR account id. Open door check-in from the host dashboard, or fix the ?event= part of the link.`, false);
+const info = await viewCall(EVENT, 'get_info', {}).catch((x) => halt(friendlyRpcError(x), true));
+let wallet = null, me = null;
+
+function showMe() {
+  $('me').innerHTML = me ? `Signed in as <b>${e(me)}</b>` : 'Not signed in';
+  $('auth').textContent = me ? 'Sign out' : 'Sign in as host / checker';
+  const role = me ? (me === info.host ? 'host' : (info.checkers || []).includes(me) ? 'checker' : null) : null;
+  $('role').innerHTML = me ? (role ? `<span class="pill ok">${role}</span> You can check guests in.` : `<span class="pill bad">not authorized</span> <small>${e(me)} is not the host (${e(info.host)}) or a checker. The host can add one with <code>add_checker</code>.</small>`) : $('role').innerHTML;
+}
+async function ensureWallet() {
+  wallet ??= await loadWallet({ network: 'testnet', contractId: EVENT });
+  wallet.onChange((a) => { me = a; showMe(); });
+  me = wallet.accountId(); showMe(); return wallet;
+}
+$('auth').onclick = async () => { const w = await ensureWallet(); if (me) { await w.signOut(); me = null; showMe(); } else w.signIn(); };
+if (walletWasUsed(localStorage, location.search)) ensureWallet().catch((x) => $('me').textContent = 'wallet: ' + x.message);
+
+async function lookup(text) {
+  const box = $('result'); box.hidden = false;
+  let guest, pass = null;
+  if (isPass(text)) {
+    box.innerHTML = '<small>Verifying signed pass…</small>';
+    pass = await verifyPass(text, { event: EVENT, accessKey: rpcAccessKey(RPC_FALLBACKS), seen });
+    if (!pass.ok) { box.innerHTML = `<div class="row"><span class="guest">${e(pass.guest || '?')}</span><span class="pill bad">pass rejected</span></div><p class="reason">${e(pass.reason)}</p>`; return; }
+    guest = pass.guest;
+  } else {
+    try { ({ guest } = parseCheckinPayload(text, EVENT)); } catch (x) { box.innerHTML = `<p class="err">${e(x.message)}</p>`; return; }
+  }
+  box.innerHTML = `<small>Reading ${e(guest)}…</small>`;
+  let status; // an RPC failure must not read as "no RSVP"
+  try { status = await viewCall(EVENT, 'get_status', { account_id: guest }); }
+  catch (x) { box.innerHTML = `<div class="row"><span class="guest">${e(guest)}</span></div><p class="err">${e(friendlyRpcError(x))} Scan or look up again.</p>`; return; }
+  const chk = checkinCheck(info, { checker: me, status, nowNs: BigInt(Date.now()) * 1_000_000n });
+  box.innerHTML = `<div class="row"><span class="guest">${e(guest)}</span><span class="pill ${status === 'Rsvp' ? 'ok' : status === 'CheckedIn' ? '' : 'bad'}">${e(status || 'no RSVP')}</span></div>
+    <p>${pass ? `<span class="pill ok">signed pass ✓</span> <small>wallet key on-chain, code ${Math.max(0, Math.round(pass.ageMs / 1000))} s old, first scan</small>` : '<span class="pill bad">unsigned code</span> <small>A plain account id or old QR could be a screenshot. Check the guest\'s ID, or ask for the signed pass.</small>'}</p>
+    <p class="reason">${chk.ok ? 'Ready. Confirm this is the person in front of you, then check in.' : e(chk.reason)}</p>
+    <button id="go" ${chk.ok ? '' : 'disabled'}>Check in ${e(guest)}</button>`;
+  $('go').onclick = async () => {
+    $('go').disabled = true; $('go').textContent = 'Confirm in your wallet…';
+    try {
+      // ?relayer=<url>: gasless check_in signed with the wallet's function-call key; falls back to the wallet on any error
+      const out = await gaslessOrWallet(() => gaslessCall({ relayer: RELAYER, accountId: me, receiverId: EVENT, methodName: 'check_in', args: { guest } }),
+        () => wallet.call(EVENT, 'check_in', { guest }));
+      const h = out?.hash ?? out?.transaction?.hash;
+      box.innerHTML = `<div class="row"><span class="guest">${e(guest)}</span><span class="pill ok">CheckedIn ✓</span></div>${h ? `<p><a href="${explorerTx(h)}" target="_blank" rel="noreferrer">View tx</a>${out?.gasless ? ' (gasless: the relayer paid the gas)' : ''}</p>` : ''}`;
+      if ($('log').querySelector('small')) $('log').innerHTML = '';
+      $('log').insertAdjacentHTML('afterbegin', `<li>${new Date().toLocaleTimeString()} · ${e(guest)}${h ? ` · <a href="${explorerTx(h)}" target="_blank" rel="noreferrer">tx</a>` : ''}</li>`);
+    } catch (x) { box.insertAdjacentHTML('beforeend', `<p class="err">${e(x.message || x)}</p>`); $('go').disabled = false; $('go').textContent = `Check in ${guest}`; }
+  };
+}
+$('manual').onsubmit = (ev) => { ev.preventDefault(); lookup($('code').value); };
+$('lookup').onclick = (ev) => { ev.preventDefault(); lookup($('code').value); };
+$('lookup').disabled = false; $('lookup').removeAttribute('title');
+if (q.get('guest')) lookup(q.get('guest'));
+
+$('scan').onclick = async () => {
+  if (!('BarcodeDetector' in window)) { $('camnote').textContent = 'This browser has no built-in QR scanner (try Chrome on Android/macOS). Paste the code instead.'; return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    const v = $('cam'); v.srcObject = stream; v.style.display = 'block'; await v.play();
+    const det = new BarcodeDetector({ formats: ['qr_code'] });
+    $('camnote').textContent = 'Point the camera at the guest\'s code…';
+    const tick = async () => {
+      const codes = await det.detect(v).catch(() => []);
+      if (codes[0]) { stream.getTracks().forEach((t) => t.stop()); v.style.display = 'none'; $('camnote').textContent = ''; return lookup(codes[0].rawValue); }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (x) { $('camnote').textContent = 'Camera unavailable: ' + x.message; }
+};
+</script>
+</body></html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>ShowUp widget demo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font:15px system-ui,sans-serif;max-width:1180px;margin:32px auto;padding:0 16px;color:#222}
+.row{display:flex;gap:24px;flex-wrap:wrap}.row>div{flex:1 1 320px}code{background:#f3f3f3;padding:2px 4px;border-radius:4px}
+.hosted{background:#fff8e1;border:1px solid #f0d77a;border-radius:10px;padding:10px 14px}</style></head>
+<body>
+<h1>ShowUp widget demo</h1>
+<p>Any event page can embed a ShowUp event with one tag:
+<code>&lt;script src="…/widget/widget.js" data-event="EVENT.testnet"&gt;&lt;/script&gt;</code>.
+Event data comes from live testnet RPC view calls. The quote is a live 1Click dry quote.
+<span id="localnote">Add <code>?relayer=http://localhost:3030</code> (with <code>pnpm relayer</code> running) to cancel gaslessly, or <code>?event=&lt;account&gt;</code> to show another event.</span></p>
+<p class="hosted" id="hostednote" hidden><b>Hosted demo (NEAR testnet).</b> Sign in with a testnet wallet (MyNearWallet or Meteor). No gasless relayer runs here, so <b>Cancel</b> and door <b>Check in</b> are signed by your own wallet (about 0.00025 testnet NEAR gas). For the gasless path run the repo locally with <code>pnpm relayer</code>. <code>?event=&lt;account&gt;</code> shows another event.</p>
+<div class="row">
+  <div><h3 id="livetitle">Live demo event: <code>demo-day</code> (door check-in open until 30 Nov 2026)</h3><div id="live"></div></div>
+  <div><h3>Judges event: <code>judges-2026</code> (RSVP open until 20 Dec 2026)</h3><div id="judges"></div></div>
+  <div><h3>Past event (already settled)</h3><div id="past"></div></div>
+</div>
+<p><a id="dash" href="../dashboard/">Host dashboard →</a> · <a id="door" href="../dashboard/checkin.html">Door check-in →</a></p>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search), ACCT = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
+  var DEMO = 'demo-day.showup-factory-1793597558.testnet', JUDGES = 'judges-2026.showup-factory-1793597558.testnet';
+  var live = q.get('event') && ACCT.test(q.get('event')) ? q.get('event') : DEMO;
+  if (live !== DEMO) document.getElementById('livetitle').textContent = 'Event: ' + live;
+  var relayer = /^https?:\/\/[^\s"'<>]+$/.test(q.get('relayer') || '') ? q.get('relayer') : '';
+  var local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  document.getElementById('hostednote').hidden = local; document.getElementById('localnote').hidden = !local;
+  document.getElementById('dash').href = '../dashboard/?event=' + encodeURIComponent(live);
+  document.getElementById('door').href = '../dashboard/checkin.html?event=' + encodeURIComponent(live);
+  var cards = [['#live', live], ['#past', 'showup-demo-1793595312.testnet']];
+  if (live !== JUDGES) cards.splice(1, 0, ['#judges', JUDGES]); else document.getElementById('judges').parentNode.hidden = true;
+  cards.forEach(function (x) {
+    var s = document.createElement('script'); s.src = 'widget.js'; s.dataset.event = x[1]; s.dataset.target = x[0];
+    if (relayer) s.dataset.relayer = relayer;
+    document.body.appendChild(s);
+  });
+})();
+</script>
+</body></html>
