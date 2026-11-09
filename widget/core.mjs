@@ -214,7 +214,7 @@ export async function gaslessOrWallet(gasless, viaWallet, warn = (m) => console.
   return out ?? viaWallet();
 }
 
-export const ONBOARDING_HINT = 'New to NEAR? Create a free testnet wallet at <a href="https://testnet.mynearwallet.com/" target="_blank" rel="noreferrer">MyNearWallet</a> — testnet NEAR is free from the <a href="https://near-faucet.io/" target="_blank" rel="noreferrer">faucet</a>.';
+export const ONBOARDING_HINT = 'New to NEAR? Create a free testnet wallet in <a href="https://wallet.meteorwallet.app/" target="_blank" rel="noreferrer">Meteor Wallet</a> (switch it to testnet) — testnet NEAR is free from the <a href="https://near-faucet.io/" target="_blank" rel="noreferrer">faucet</a>.';
 
 export function renderCard(eventId, s) {
   const e = escapeHtml;

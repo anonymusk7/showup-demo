@@ -1,7 +1,7 @@
 # ShowUp hosted demo (NEAR testnet)
 
 Static build of the ShowUp widget, host dashboard and door check-in page, served by GitHub Pages.
-Built by `scripts/build-pages.mjs` from https://github.com/anonymusk7/near-showup at commit `b5313d4`.
+Built by `scripts/build-pages.mjs` from https://github.com/anonymusk7/near-showup at commit `b412f03`.
 
 - Widget demo: https://anonymusk7.github.io/showup-demo/widget/demo.html
 - Host dashboard: https://anonymusk7.github.io/showup-demo/dashboard/
