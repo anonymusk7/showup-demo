@@ -5,7 +5,9 @@ export const ONECLICK_BASE = 'https://1click.chaindefuser.com/v0';
 // answers CORS (access-control-allow-origin: *, checked 2026-11-09), so on a static host with no proxy (GitHub Pages)
 // a 404/405 or network error from the proxy falls back to calling 1Click directly.
 export const ONECLICK_PROXY = (() => { try { const u = new URL('/api/1click', import.meta.url); return /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; } })();
-export const defaultQuoteBase = () => (globalThis.document && ONECLICK_PROXY) || ONECLICK_BASE;
+const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])$/;
+// The proxy only exists on the local dev server; a hosted page (GitHub Pages, any embed) calls 1Click directly.
+export const defaultQuoteBase = () => (globalThis.document && ONECLICK_PROXY && LOCAL_HOST.test(new URL(ONECLICK_PROXY).hostname) && ONECLICK_PROXY) || ONECLICK_BASE;
 /** Short, human error for a failed quote. 5xx / 52x / HTML bodies / network errors mean 1Click is down. */
 export function friendlyQuoteError(err) {
   const m = String(err?.message || err);
